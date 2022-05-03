@@ -31,8 +31,8 @@ def sent2features(sent):
 # ******** LSTM模型 工具函数*************
 
 def tensorized(batch, maps):
-    PAD = maps.get('<pad>')
-    UNK = maps.get('<unk>')
+    PAD = maps.get('<PAD>')
+    UNK = maps.get('<UNK>')
 
     max_len = len(batch[0])
     batch_size = len(batch)
@@ -48,6 +48,7 @@ def tensorized(batch, maps):
 
 
 def sort_by_lengths(word_lists, tag_lists):
+    
     pairs = list(zip(word_lists, tag_lists))
     indices = sorted(range(len(pairs)),
                      key=lambda k: len(pairs[k][0]),
@@ -60,6 +61,18 @@ def sort_by_lengths(word_lists, tag_lists):
     return word_lists, tag_lists, indices
 
 
+def sort_length(word_lists):
+    
+    pairs = word_lists
+    indices = sorted(range(len(pairs)), key=lambda k: len(pairs[k]), reverse=True)
+    pairs = [pairs[i] for i in indices]
+    # pairs.sort(key=lambda pair: len(pair[0]), reverse=True)
+
+    word_lists = pairs
+
+    return word_lists, indices
+
+
 def cal_loss(logits, targets, tag2id):
     """计算损失
     参数:
@@ -67,7 +80,7 @@ def cal_loss(logits, targets, tag2id):
         targets: [B, L]
         lengths: [B]
     """
-    PAD = tag2id.get('<pad>')
+    PAD = tag2id.get('<PAD>')
     assert PAD is not None
 
     mask = (targets != PAD)  # [B, L]
@@ -89,7 +102,7 @@ def cal_lstm_crf_loss(crf_scores, targets, tag2id):
     """计算双向LSTM-CRF模型的损失
     该损失函数的计算可以参考:https://arxiv.org/pdf/1603.01360.pdf
     """
-    pad_id = tag2id.get('<pad>')
+    pad_id = tag2id.get('<PAD>')
     start_id = tag2id.get('<start>')
     end_id = tag2id.get('<end>')
 

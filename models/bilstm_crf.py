@@ -5,9 +5,26 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
-from .util import tensorized, sort_by_lengths, cal_loss, cal_lstm_crf_loss
+from .util import sort_length, tensorized, sort_by_lengths, cal_loss, cal_lstm_crf_loss
 from .config import TrainingConfig, LSTMConfig
 from .bilstm import BiLSTM
+
+# 设置lstm训练参数
+class TrainingConfig(object):
+    batch_size = 64
+    # 学习速率
+    lr = 0.001
+    epoches = 20
+    print_step = 10
+
+
+class LSTMConfig(object):
+    emb_size = 128  # 词向量的维数
+    hidden_size = 128  # lstm隐向量的维数
+
+
+
+
 
 
 class BILSTM_Model(object):
@@ -17,12 +34,11 @@ class BILSTM_Model(object):
             vocab_size:词典大小
             out_size:标注种类
             crf选择是否添加CRF层"""
-        self.device = torch.device(
-            "cuda" if torch.cuda.is_available() else "cpu")
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         # 加载模型参数
-        self.emb_size = LSTMConfig.emb_size
-        self.hidden_size = LSTMConfig.hidden_size
+        self.emb_size = 128
+        self.hidden_size = 128
 
         self.crf = crf
         # 根据是否添加crf初始化不同的模型 选择不一样的损失计算函数
@@ -64,12 +80,10 @@ class BILSTM_Model(object):
             for ind in range(0, len(word_lists), B):
                 batch_sents = word_lists[ind:ind+B]
                 batch_tags = tag_lists[ind:ind+B]
-
-                losses += self.train_step(batch_sents,
-                                          batch_tags, word2id, tag2id)
-
-                if self.step % TrainingConfig.print_step == 0:
-                    total_step = (len(word_lists) // B + 1)
+                losses += self.train_step(batch_sents, batch_tags, word2id, tag2id)
+                total_step = (len(word_lists) // B + 1)
+                if (self.step % TrainingConfig.print_step == 0) or self.step ==  total_step:
+                    
                     print("Epoch {}, step/total_step: {}/{} {:.2f}% Loss:{:.4f}".format(
                         e, self.step, total_step,
                         100. * self.step / total_step,
@@ -134,41 +148,42 @@ class BILSTM_Model(object):
 
             return val_loss
 
-    def test(self, word_lists, tag_lists, word2id, tag2id):
+    def test(self, word_lists, word2id, tag2id):
         """返回最佳模型在测试集上的预测结果"""
-        # 准备数据
-        word_lists, tag_lists, indices = sort_by_lengths(word_lists, tag_lists)
-        tensorized_sents, lengths = tensorized(word_lists, word2id)
-        tensorized_sents = tensorized_sents.to(self.device)
-
-        self.best_model.eval()
         with torch.no_grad():
-            batch_tagids = self.best_model.test(
-                tensorized_sents, lengths, tag2id)
+            # 准备数据
+            word_lists, indices = sort_length(word_lists)
+            tensorized_sents, lengths = tensorized(word_lists, word2id)
+            tensorized_sents = tensorized_sents.to(self.device)
+            
+            self.best_model.eval()
+            # batch_tagids = self.best_model.test(tensorized_sents, lengths, tag2id)
+            logits = self.best_model.forward(tensorized_sents, lengths)  # [B, L, out_size]
+            _, batch_tagids = torch.max(logits, dim=2)
 
-        # 将id转化为标注
-        pred_tag_lists = []
-        id2tag = dict((id_, tag) for tag, id_ in tag2id.items())
-        for i, ids in enumerate(batch_tagids):
-            tag_list = []
-            if self.crf:
-                for j in range(lengths[i] - 1):  # crf解码过程中，end被舍弃
-                    tag_list.append(id2tag[ids[j].item()])
-            else:
-                for j in range(lengths[i]):
-                    tag_list.append(id2tag[ids[j].item()])
-            pred_tag_lists.append(tag_list)
+            # 将id转化为标注
+            pred_tag_lists = []
+            id2tag = dict((id_, tag) for tag, id_ in tag2id.items())
+            for i, ids in enumerate(batch_tagids):
+                tag_list = []
+                if self.crf:
+                    for j in range(lengths[i] - 1):  # crf解码过程中，end被舍弃
+                        tag_list.append(id2tag[ids[j].item()])
+                else:
+                    for j in range(lengths[i]):
+                        tag_list.append(id2tag[ids[j].item()])
+                pred_tag_lists.append(tag_list)
 
-        # indices存有根据长度排序后的索引映射的信息
-        # 比如若indices = [1, 2, 0] 则说明原先索引为1的元素映射到的新的索引是0，
-        # 索引为2的元素映射到新的索引是1...
-        # 下面根据indices将pred_tag_lists和tag_lists转化为原来的顺序
-        ind_maps = sorted(list(enumerate(indices)), key=lambda e: e[1])
-        indices, _ = list(zip(*ind_maps))
-        pred_tag_lists = [pred_tag_lists[i] for i in indices]
-        tag_lists = [tag_lists[i] for i in indices]
+            # indices存有根据长度排序后的索引映射的信息
+            # 比如若indices = [1, 2, 0] 则说明原先索引为1的元素映射到的新的索引是0，
+            # 索引为2的元素映射到新的索引是1...
+            # 下面根据indices将pred_tag_lists和tag_lists转化为原来的顺序
+            ind_maps = sorted(list(enumerate(indices)), key=lambda e: e[1])
+            indices, _ = list(zip(*ind_maps))
+            pred_tag_lists = [pred_tag_lists[i] for i in indices]
+            # tag_lists = [tag_lists[i] for i in indices]
 
-        return pred_tag_lists, tag_lists
+        return pred_tag_lists #, tag_lists
 
 
 class BiLSTM_CRF(nn.Module):
@@ -189,8 +204,8 @@ class BiLSTM_CRF(nn.Module):
 
     def forward(self, sents_tensor, lengths):
         # [B, L, out_size]
+        
         emission = self.bilstm(sents_tensor, lengths)
-
         # 计算CRF scores, 这个scores大小为[B, L, out_size, out_size]
         # 也就是每个字对应对应一个 [out_size, out_size]的矩阵
         # 这个矩阵第i行第j列的元素的含义是：上一时刻tag为i，这一时刻tag为j的分数

@@ -7,15 +7,16 @@ class HMM(object):
             N: 状态数，这里对应存在的标注的种类
             M: 观测数，这里对应有多少不同的字
         """
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.N = N
         self.M = M
 
         # 状态转移概率矩阵 A[i][j]表示从i状态转移到j状态的概率
-        self.A = torch.zeros(N, N)
+        self.A = torch.zeros(N, N).to(self.device)
         # 观测概率矩阵, B[i][j]表示i状态下生成j观测的概率
-        self.B = torch.zeros(N, M)
+        self.B = torch.zeros(N, M).to(self.device)
         # 初始状态概率  Pi[i]表示初始时刻为状态i的概率
-        self.Pi = torch.zeros(N)
+        self.Pi = torch.zeros(N).to(self.device)
 
     def train(self, word_lists, tag_lists, word2id, tag2id):
         """HMM的训练，即根据训练语料对模型参数进行估计,
@@ -41,7 +42,7 @@ class HMM(object):
         # 解决方法：我们将等于0的概率加上很小的数
         self.A[self.A == 0.] = 1e-10
         self.A = self.A / self.A.sum(dim=1, keepdim=True)
-
+        print("finished transA")
         # 估计观测概率矩阵
         for tag_list, word_list in zip(tag_lists, word_lists):
             assert len(tag_list) == len(word_list)
@@ -51,14 +52,15 @@ class HMM(object):
                 self.B[tag_id][word_id] += 1
         self.B[self.B == 0.] = 1e-10
         self.B = self.B / self.B.sum(dim=1, keepdim=True)
-
+        print("finished transB")
         # 估计初始状态概率
         for tag_list in tag_lists:
             init_tagid = tag2id[tag_list[0]]
             self.Pi[init_tagid] += 1
         self.Pi[self.Pi == 0.] = 1e-10
         self.Pi = self.Pi / self.Pi.sum()
-
+        print("finished transPi")
+        
     def test(self, word_lists, word2id, tag2id):
         pred_tag_lists = []
         for word_list in word_lists:
@@ -75,18 +77,18 @@ class HMM(object):
         # 问题:整条链很长的情况下，十分多的小概率相乘，最后可能造成下溢
         # 解决办法：采用对数概率，这样源空间中的很小概率，就被映射到对数空间的大的负数
         #  同时相乘操作也变成简单的相加操作
-        A = torch.log(self.A)
-        B = torch.log(self.B)
-        Pi = torch.log(self.Pi)
+        A = torch.log(self.A).to(self.device)
+        B = torch.log(self.B).to(self.device)
+        Pi = torch.log(self.Pi).to(self.device)
 
         # 初始化 维比特矩阵viterbi 它的维度为[状态数, 序列长度]
         # 其中viterbi[i, j]表示标注序列的第j个标注为i的所有单个序列(i_1, i_2, ..i_j)出现的概率最大值
         seq_len = len(word_list)
-        viterbi = torch.zeros(self.N, seq_len)
+        viterbi = torch.zeros(self.N, seq_len).to(self.device)
         # backpointer是跟viterbi一样大小的矩阵
         # backpointer[i, j]存储的是 标注序列的第j个标注为i时，第j-1个标注的id
         # 等解码的时候，我们用backpointer进行回溯，以求出最优路径
-        backpointer = torch.zeros(self.N, seq_len).long()
+        backpointer = torch.zeros(self.N, seq_len).long().to(self.device)
 
         # self.Pi[i] 表示第一个字的标记为i的概率
         # Bt[word_id]表示字为word_id的时候，对应各个标记的概率
@@ -97,7 +99,7 @@ class HMM(object):
         Bt = B.t()
         if start_wordid is None:
             # 如果字不再字典里，则假设状态的概率分布是均匀的
-            bt = torch.log(torch.ones(self.N) / self.N)
+            bt = torch.log(torch.ones(self.N) / self.N).to(self.device)
         else:
             bt = Bt[start_wordid]
         viterbi[:, 0] = Pi + bt
@@ -113,7 +115,7 @@ class HMM(object):
             # bt是在t时刻字为wordid时，状态的概率分布
             if wordid is None:
                 # 如果字不再字典里，则假设状态的概率分布是均匀的
-                bt = torch.log(torch.ones(self.N) / self.N)
+                bt = torch.log(torch.ones(self.N) / self.N).to(self.device)
             else:
                 bt = Bt[wordid]  # 否则从观测概率矩阵中取bt
             for tag_id in range(len(tag2id)):

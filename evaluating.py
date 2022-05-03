@@ -4,7 +4,7 @@ from utils import flatten_lists
 
 
 class Metrics(object):
-    """用于评价模型，计算每个标签的精确率，召回率，F1分数"""
+    """用于评价模型,计算每个标签的精确率,召回率,F1分数"""
 
     def __init__(self, golden_tags, predict_tags, remove_O=False):
 
